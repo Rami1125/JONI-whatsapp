@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+const date = r.date || (r.timestamp ? new Date(r.timestamp).toLocaleDateString('he-IL') : '');
+const time = r.time || (r.timestamp ? new Date(r.timestamp).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}) : '');
+tr.innerHTML = `
+<td class="p-3">${date||''}</td>
+<td class="p-3">${time||''}</td>
+<td class="p-3">${r.sender_phone||''}</td>
+<td class="p-3">${r.sender_name||r.chat_name||''}</td>
+<td class="p-3 text-right">${(r.message||'').replace(/</g,'&lt;')}</td>
+<td class="p-3">${r.status||''}</td>`;
+tb.appendChild(tr);
+});
+}
+
+
+async function refresh(type){
+const rows = await fetchList(type);
+renderRows(rows);
+}
+
+
+document.getElementById('refresh').onclick = () => refresh(currentTab);
+document.getElementById('btnIncoming').onclick = () => { currentTab='incoming'; refresh(currentTab); };
+document.getElementById('btnScheduled').onclick = () => { currentTab='scheduled'; refresh(currentTab); };
+document.getElementById('btnReminders').onclick = () => { currentTab='reminders'; refresh(currentTab); };
+document.getElementById('search').addEventListener('input', () => refresh(currentTab));
+
+
+document.getElementById('schSend').onclick = async () => {
+const phone = document.getElementById('schPhone').value.trim();
+const message = document.getElementById('schMsg').value.trim();
+const d = document.getElementById('schDate').value;
+const t = document.getElementById('schTime').value;
+if(!phone||!message||!d||!t){ alert('נא למלא מספר, הודעה, תאריך ושעה'); return; }
+const datetime = new Date(`${d}T${t}:00`);
+const res = await fetch(`${DATA_API_URL}?action=schedule_send`,{
+method:'POST', headers:{'Content-Type':'application/json'},
+body: JSON.stringify({ phone, message, datetime: datetime.toISOString() })
+});
+const js = await res.json();
+if(js.ok){ alert('נשמר בהצלחה'); refresh('scheduled'); }
+else{ alert('שגיאה: '+(js.error||'')); }
+};
+
+
+// CSV upload (manual backup import) — expects columns per whatsapp_import_template.csv
+document.getElementById('csvInput').addEventListener('change', async (ev)=>{
+const file = ev.target.files[0];
+if(!file) return;
+const text = await file.text();
+const res = await fetch(`${DATA_API_URL}?action=import_csv`,{
+method:'POST', body: text
+});
+const js = await res.json();
+alert(js.ok ? `יובאו ${js.rows} שורות` : `שגיאה: ${js.error}`);
+refresh('incoming');
+});
+
+
+let currentTab = 'incoming';
+refresh(currentTab);
+</script>
+</body>
+</html>
