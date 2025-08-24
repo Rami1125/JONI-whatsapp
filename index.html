@@ -1,445 +1,1299 @@
-<!DOCTYPE html>
-<html lang="he" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>מציג גיבוי WhatsApp</title>
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Inter Font -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: #e0f2f1; /* Light greenish background */
-            background-image: url('https://placehold.co/1920x1080/e0f2f1/000000?text=WhatsApp+Background'); /* Placeholder for WhatsApp-like background pattern */
-            background-size: cover;
-            background-position: center;
-            display: flex;
-            justify-content: center;
-            align-items: flex-start; /* Align to top for better content display */
-            min-height: 100vh;
-            padding: 20px;
-        }
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import {
+  getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, updateDoc, deleteDoc,
+  where, getDocs
+} from 'firebase/firestore';
+import { v4 as uuidv4 } from 'uuid'; // For generating unique IDs for new contacts
 
-        /* Custom scrollbar */
-        ::-webkit-scrollbar {
-            width: 8px;
-        }
+// --- JONI Integration Constants (PLACEHOLDER) ---
+// Note: In a real-world scenario, JONI API calls would happen from the Google Apps Script
+// or a secure backend, not directly from the client-side React app for security.
+// This is a placeholder for demonstration purposes.
+const JONI_SEND_API_URL = "YOUR_JONI_SEND_API_ENDPOINT_HERE";
+const JONI_API_KEY = "YOUR_JONI_API_KEY_HERE";
 
-        ::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 10px;
-        }
+// --- Google Drive & Office 365 Placeholders (Client-Side Simulation) ---
+// In a real-world scenario, these would involve server-side authentication and API calls.
+const uploadToGoogleDrive = async (file, contactId) => {
+  console.log(`Simulating upload of file ${file.name} to Google Drive for contact ${contactId}`);
+  // Actual API call would involve Google Drive API, e.g., via Google Apps Script or a backend
+  return new Promise(resolve => setTimeout(() => resolve(`https://drive.google.com/file/${uuidv4()}`), 1500));
+};
 
-        ::-webkit-scrollbar-thumb {
-            background: #888;
-            border-radius: 10px;
-        }
+const createOffice365Meeting = async (details) => {
+  console.log("Simulating Office 365 meeting creation:", details);
+  // Actual API call would involve Office 365 Graph API
+  return new Promise(resolve => setTimeout(() => resolve(`https://outlook.office.com/calendar/meeting/${uuidv4()}`), 1500));
+};
 
-        ::-webkit-scrollbar-thumb:hover {
-            background: #555;
-        }
+const App = () => {
+  const [messages, setMessages] = useState([]);
+  const [inputMessage, setInputMessage] = useState('');
+  const [currentChatId, setCurrentChatId] = useState(null);
+  const [chatSummaries, setChatSummaries] = useState([]);
+  const [contacts, setContacts] = useState([]); // All contacts for the "Contacts" tab
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [myContactName, setMyContactName] = useState('ראמי מסארוה'); // User's own name
+  const [myProfilePic, setMyProfilePic] = useState('https://i.postimg.cc/2817JMT2/2025-08-24-044258.png'); // User's profile pic
+  const [systemMessage, setSystemMessage] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [showOrderModal, setShowOrderModal] = useState(false);
+  const [showReminderModal, setShowReminderModal] = useState(false);
+  const [showContactDetailModal, setShowContactDetailModal] = useState(false); // For showing contact details
+  const [showAddContactModal, setShowAddContactModal] = useState(false); // For adding new contact
+  const [showUploadChatModal, setShowUploadChatModal] = useState(false); // For uploading chat to a new contact
+  const [selectedContact, setSelectedContact] = useState(null); // The contact whose details are shown
+  const [orderForm, setOrderForm] = useState({ customer: '', items: '', date: '', notes: '' });
+  const [reminderForm, setReminderForm] = useState({ title: '', date: '', time: '', notes: '', contactId: null });
+  const [newContactForm, setNewContactForm] = useState({ name: '', whatsappNumber: '', profilePic: '', email: '', address: '', socialMedia: '' });
+  const [currentTab, setCurrentTab] = useState('chats'); // 'chats' or 'contacts'
+  const [userId, setUserId] = useState(null);
+  const [db, setDb] = useState(null);
+  const [auth, setAuth] = useState(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const messagesEndRef = useRef(null);
+  const chatInputRef = useRef(null); // Ref for the chat input field for paste event
+  const [contactSearchTerm, setContactSearchTerm] = useState(''); // For contact search
 
-        .whatsapp-container {
-            background-color: rgba(255, 255, 255, 0.95);
-            border-radius: 20px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
-            overflow: hidden;
-            width: 100%;
-            max-width: 800px; /* Standard chat width */
-            margin: 20px auto;
-            display: flex;
-            flex-direction: column;
-            min-height: 80vh;
-        }
+  const highlightRules = [
+    { regex: /(הזמנה חדשה|דחוף|טיפול|לא טופל|צריך לבדוק)/g, className: 'bg-yellow-200 font-bold' },
+    { regex: /(תזכורת|יומן|מחר|היום)/g, className: 'bg-blue-200 font-bold' },
+    { regex: /(בעיה|תקלה|חסר)/g, className: 'bg-red-200 font-bold' },
+  ];
 
-        .chat-header {
-            background-color: #128C7E; /* WhatsApp green */
-            color: white;
-            padding: 1rem 1.5rem;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            border-top-left-radius: 20px;
-            border-top-right-radius: 20px;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-        }
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
 
-        .whatsapp-logo-viewer {
-            font-size: 1.8rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .whatsapp-icon-viewer {
-            background-color: white;
-            border-radius: 50%;
-            width: 35px;
-            height: 35px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #25D366;
-            font-size: 1.2rem;
-        }
+  // Firebase Initialization and Auth
+  useEffect(() => {
+    const appId = typeof __app_id !== "undefined" ? __app_id : 'default-app-id';
+    const firebaseConfig = typeof __firebase_config !== "undefined" ? JSON.parse(__firebase_config) : {};
 
-        .chat-area {
-            flex-grow: 1;
-            overflow-y: auto;
-            padding: 1rem;
-            background-color: #e5ddd5; /* Chat background color */
-        }
+    if (Object.keys(firebaseConfig).length === 0) {
+      console.error("Firebase config is missing or empty.");
+      setSystemMessage("שגיאה: הגדרות Firebase חסרות. אנא ודא שהאפליקציה הוגדרה כהלכה.");
+      return;
+    }
 
-        .message-bubble {
-            max-width: 80%;
-            padding: 0.6rem 0.8rem;
-            margin-bottom: 0.5rem;
-            border-radius: 0.75rem;
-            word-wrap: break-word;
-            box-shadow: 0 1px 1px rgba(0, 0, 0, 0.08);
-            position: relative;
-            font-size: 0.95rem;
-        }
+    const app = initializeApp(firebaseConfig);
+    const firestoreDb = getFirestore(app);
+    const firebaseAuth = getAuth(app);
 
-        .message-sender {
-            font-weight: 600;
-            margin-bottom: 0.2rem;
-            font-size: 0.8rem;
-        }
+    setDb(firestoreDb);
+    setAuth(firebaseAuth);
 
-        .message-timestamp {
-            font-size: 0.7rem;
-            color: #777;
-            text-align: left; /* Adjust for RTL */
-            margin-top: 0.3rem;
+    const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
+      if (user) {
+        setUserId(user.uid);
+      } else {
+        const initialAuthToken = typeof __initial_auth_token !== "undefined" ? __initial_auth_token : null;
+        if (initialAuthToken) {
+          try {
+            await signInWithCustomToken(firebaseAuth, initialAuthToken);
+          } catch (error) {
+            console.error("Error signing in with custom token:", error);
+            await signInAnonymously(firebaseAuth);
+          }
+        } else {
+          await signInAnonymously(firebaseAuth);
         }
+      }
+      setIsAuthReady(true);
+    });
 
-        .message-incoming {
-            background-color: #ffffff; /* White bubble for incoming */
-            align-self: flex-start;
-            margin-right: auto;
-            border-bottom-right-radius: 0.1rem; /* Simulate WhatsApp bubble corner */
-        }
+    return () => unsubscribe();
+  }, []);
 
-        .message-outgoing {
-            background-color: #dcf8c6; /* Green bubble for outgoing */
-            align-self: flex-end;
-            margin-left: auto;
-            border-bottom-left-radius: 0.1rem; /* Simulate WhatsApp bubble corner */
-        }
-        .message-outgoing .message-timestamp {
-            color: #6d6d6d;
-        }
+  // Fetch chat summaries, contacts, and active chat messages once authenticated
+  useEffect(() => {
+    if (!isAuthReady || !db || !userId) return;
 
-        .file-input-section {
-            padding: 1.5rem;
-            border-top: 1px solid #eee;
-            background-color: #f7f7f7;
-            border-bottom-left-radius: 20px;
-            border-bottom-right-radius: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 1rem;
-            align-items: center;
-        }
+    // Fetch contacts
+    const qContacts = query(collection(db, `artifacts/${__app_id}/users/${userId}/contacts`), orderBy('name'));
+    const unsubscribeContacts = onSnapshot(qContacts, (snapshot) => {
+      setContacts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => {
+      console.error("Error fetching contacts:", error);
+      setSystemMessage("שגיאה בטעינת אנשי קשר.");
+    });
 
-        .file-input-section label {
-            font-weight: 500;
-            color: #333;
-        }
+    // Fetch chat summaries
+    const qChats = query(collection(db, `artifacts/${__app_id}/users/${userId}/chats`), orderBy('lastMessageTimestamp', 'desc'));
+    const unsubscribeChats = onSnapshot(qChats, (snapshot) => {
+      const summaries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setChatSummaries(summaries);
+      if (!currentChatId && summaries.length > 0) {
+        setCurrentChatId(summaries[0].id);
+      }
+    }, (error) => {
+      console.error("Error fetching chat summaries:", error);
+      setSystemMessage("שגיאה בטעינת סיכומי צ'אטים.");
+    });
 
-        .file-input-section input[type="file"] {
-            padding: 0.75rem;
-            border: 1px solid #ddd;
-            border-radius: 10px;
-            width: 100%;
-            max-width: 400px;
-            background-color: white;
-            cursor: pointer;
-            transition: border-color 0.2s;
-        }
-        .file-input-section input[type="file"]:hover {
-            border-color: #25D366;
-        }
+    // Fetch messages for the currently selected chat
+    let unsubscribeMessages = () => {};
+    if (currentChatId) {
+      const qMessages = query(collection(db, `artifacts/${__app_id}/users/${userId}/chats/${currentChatId}/messages`), orderBy('timestamp'));
+      unsubscribeMessages = onSnapshot(qMessages, (snapshot) => {
+        const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setMessages(msgs);
+        scrollToBottom();
+      }, (error) => {
+        console.error("Error fetching messages:", error);
+        setSystemMessage("שגיאה בטעינת הודעות צ'אט.");
+      });
+    }
 
-        .upload-button {
-            background-color: #075E54; /* Darker WhatsApp green */
-            color: white;
-            padding: 0.75rem 1.5rem;
-            border-radius: 15px;
-            font-weight: 600;
-            transition: background-color 0.2s;
-            cursor: pointer;
-            width: 100%;
-            max-width: 400px;
-            text-align: center;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-        }
-        .upload-button:hover:not(:disabled) {
-            background-color: #128C7E;
-            transform: translateY(-1px);
-        }
-        .upload-button:disabled {
-            background-color: #a0a0a0;
-            cursor: not-allowed;
-        }
+    return () => {
+      unsubscribeContacts();
+      unsubscribeChats();
+      unsubscribeMessages();
+    };
+  }, [isAuthReady, db, userId, currentChatId]);
 
-        .loading-text {
-            color: #555;
-            font-size: 0.9rem;
-            margin-top: 0.5rem;
-        }
+  // Handle file upload (WhatsApp .txt backup or .vcf)
+  const handleFileSelect = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
 
-        @media (max-width: 768px) {
-            .whatsapp-container {
-                margin: 10px auto;
-                min-height: 95vh;
-            }
-            .chat-header {
-                padding: 1rem;
-            }
-            .chat-area {
-                padding: 0.75rem;
-            }
-            .message-bubble {
-                padding: 0.5rem 0.7rem;
-                font-size: 0.9rem;
-            }
-            .file-input-section {
-                padding: 1rem;
-            }
-            .upload-button {
-                max-width: none;
-            }
+    setSelectedFile(file);
+    setLoading(true);
+    setSystemMessage('מעבד קובץ גיבוי...');
+
+    try {
+      const fileContent = await file.text();
+      if (file.name.endsWith('.txt')) {
+        await processWhatsAppChatFile(fileContent, file.name);
+      } else if (file.name.endsWith('.vcf')) {
+        await processVCardFile(fileContent);
+      } else {
+        setSystemMessage('פורמט קובץ לא נתמך. אנא העלה קובץ .txt או .vcf.');
+      }
+    } catch (error) {
+      console.error("Error processing file:", error);
+      setSystemMessage(`שגיאה בעיבוד הקובץ: ${error.message}`);
+    } finally {
+      setLoading(false);
+      setSelectedFile(null);
+    }
+  };
+
+  const processWhatsAppChatFile = async (fileContent, fileName) => {
+    const parsedMessages = parseWhatsAppChat(fileContent);
+
+    if (parsedMessages.length === 0) {
+      setSystemMessage('לא נמצאו הודעות בקובץ הגיבוי. ודא שהפורמט נכון.');
+      return;
+    }
+
+    // Determine chat name from the filename or message senders
+    let chatName = fileName.replace(".txt", "").replace("‏צ'אט WhatsApp עם ‏‪", "").replace("‬‏", "");
+    const phoneRegex = /\+?\d{9,15}/; // Basic phone number regex
+    const phoneMatch = chatName.match(phoneRegex);
+
+    if (phoneMatch) {
+      chatName = chatName.replace(phoneMatch[0], "").trim(); // Remove phone number from chat name
+    }
+
+    // Attempt to find a contact or create a new one based on chatName and phone number
+    let contactDoc = contacts.find(c => c.name === chatName || c.whatsappNumber === phoneMatch?.[0]);
+    let contactId;
+
+    if (!contactDoc) {
+      // Create a new contact
+      const newContactData = {
+        name: chatName,
+        whatsappNumber: phoneMatch ? phoneMatch[0] : "",
+        profilePic: `https://placehold.co/100x100/F0F2F5/A3A9B2?text=${chatName.charAt(0)}`, // Placeholder
+        createdAt: serverTimestamp(),
+      };
+      const newContactRef = await addDoc(collection(db, `artifacts/${__app_id}/users/${userId}/contacts`), newContactData);
+      contactId = newContactRef.id;
+      contactDoc = { id: contactId, ...newContactData };
+    } else {
+      contactId = contactDoc.id;
+    }
+
+    // Create or update chat summary
+    let chatRef;
+    const existingChatQuery = query(collection(db, `artifacts/${__app_id}/users/${userId}/chats`), where('contactId', "==", contactId));
+    const existingChatSnapshot = await getDocs(existingChatQuery);
+
+    if (!existingChatSnapshot.empty) {
+      chatRef = existingChatSnapshot.docs[0].ref;
+      await updateDoc(chatRef, {
+        lastMessageTimestamp: parsedMessages[parsedMessages.length - 1].timestamp,
+        summary: parsedMessages[parsedMessages.length - 1].message,
+        contactName: contactDoc.name,
+      });
+    } else {
+      chatRef = await addDoc(collection(db, `artifacts/${__app_id}/users/${userId}/chats`), {
+        name: contactDoc.name,
+        contactId: contactId,
+        lastMessageTimestamp: parsedMessages[parsedMessages.length - 1].timestamp,
+        summary: parsedMessages[parsedMessages.length - 1].message,
+        createdAt: serverTimestamp(),
+      });
+    }
+    setCurrentChatId(chatRef.id);
+
+    // Add messages to the subcollection
+    const messagesCollectionRef = collection(db, `artifacts/${__app_id}/users/${userId}/chats/${chatRef.id}/messages`);
+    for (const msg of parsedMessages) {
+      await addDoc(messagesCollectionRef, {
+        sender: msg.sender,
+        message: msg.message,
+        timestamp: msg.timestamp,
+        originalTimestamp: msg.originalTimestamp
+      });
+    }
+    setSystemMessage("קובץ גיבוי צ'אט נטען בהצלחה! ההודעות נשמרו ב-Firestore.");
+  };
+
+  const processVCardFile = async (fileContent) => {
+    const vcfs = fileContent.split('END:VCARD').filter(block => block.trim() !== '').map(block => block + 'END:VCARD');
+
+    for (const vcf of vcfs) {
+      const nameMatch = vcf.match(/FN:(.*)/);
+      const telMatch = vcf.match(/TEL;waid=(\+?\d+):(\+?\d+)/) || vcf.match(/TEL;type=CELL;type=VOICE:(\+?\d+)/);
+      const photoMatch = vcf.match(/PHOTO;BASE64:(.*)/s); // 's' flag for dotall
+
+      const name = nameMatch ? nameMatch[1].trim() : 'שם לא ידוע';
+      const whatsappNumber = telMatch ? (telMatch[1] || telMatch[2]).trim() : '';
+      const profilePicBase64 = photoMatch ? photoMatch[1].trim() : '';
+
+      let profilePicUrl = `https://placehold.co/100x100/F0F2F5/A3A9B2?text=${name.charAt(0)}`;
+      if (profilePicBase64) {
+        // In a real app, you'd upload this to a storage service (like Google Cloud Storage) and get a URL.
+        // For this demo, we'll indicate it was found.
+        profilePicUrl = 'Base64 image found (needs upload to storage)';
+        console.log(`Base64 image for ${name} found. In a real app, this would be uploaded.`);
+      }
+
+      const existingContact = contacts.find(c => (c.whatsappNumber && c.whatsappNumber === whatsappNumber) || c.name === name);
+
+      if (existingContact) {
+        await updateDoc(doc(db, `artifacts/${__app_id}/users/${userId}/contacts`, existingContact.id), {
+          name: name,
+          whatsappNumber: whatsappNumber,
+          profilePic: profilePicUrl,
+        });
+      } else {
+        await addDoc(collection(db, `artifacts/${__app_id}/users/${userId}/contacts`), {
+          name: name,
+          whatsappNumber: whatsappNumber,
+          profilePic: profilePicUrl,
+          createdAt: serverTimestamp(),
+        });
+      }
+    }
+    setSystemMessage('קובץ אנשי קשר (.vcf) נטען בהצלחה! אנשי הקשר נשמרו/עודכנו ב-Firestore.');
+  };
+
+  // Parse WhatsApp .txt chat backup
+  const parseWhatsAppChat = (chatContent) => {
+    const messages = [];
+    const lines = chatContent.split('\n');
+    const regex = /^\[(\d{1,2}\/\d{1,2}\/\d{4}), (\d{1,2}:\d{2}:\d{2} [אב"צלה"נ]{1,3})\] (.*?): (.*)/; // Updated regex for Hebrew AM/PM, handling more variations
+
+    let currentMessage = null;
+
+    for (const line of lines) {
+      const match = line.match(regex);
+      if (match) {
+        if (currentMessage) {
+          messages.push(currentMessage);
         }
-    </style>
-</head>
-<body class="bg-gradient-to-br from-green-100 to-teal-100">
-    <div class="whatsapp-container">
-        <header class="chat-header">
-            <div class="whatsapp-logo-viewer">
-                <span class="whatsapp-icon-viewer">💬</span>
-                צפייה בגיבוי WhatsApp
+        const [, dateStr, timeStr, sender, message] = match;
+        const formattedDate = formatHebrewDateTime(`${dateStr} ${timeStr}`);
+        currentMessage = {
+          sender: sender.trim(),
+          message: message.trim(),
+          timestamp: formattedDate,
+          originalTimestamp: `${dateStr} ${timeStr}`
+        };
+      } else if (currentMessage) {
+        currentMessage.message += '\n' + line.trim();
+      }
+    }
+    if (currentMessage) {
+      messages.push(currentMessage);
+    }
+    return messages;
+  };
+
+  const formatHebrewDateTime = (hebrewDateTime) => {
+    let [datePart, timePart] = hebrewDateTime.split(', ');
+    const [day, month, year] = datePart.split('/').map(Number);
+    let [time, ampm] = timePart.split(' ');
+
+    let [hours, minutes, seconds] = time.split(':').map(Number);
+
+    if (ampm) {
+        if (ampm.includes('לפנות בוקר') && hours === 12) { hours = 0; } // 12 AM is midnight
+        else if (ampm.includes('צהריים') && hours < 12) { hours += 12; } // 1-11 PM
+        else if (ampm.includes('אחר הצהריים') && hours < 12) { hours += 12; }
+        else if (ampm.includes('ערב') && hours < 12) { hours += 12; }
+        else if (ampm.includes('לילה') && hours < 12) { hours += 12; } // Handle cases like 1 AM (1 בלילה)
+    }
+
+    return new Date(year, month - 1, day, hours, minutes, seconds || 0);
+  };
+
+  const handleSendMessage = async () => {
+    if (!inputMessage.trim() || !currentChatId || !db || !userId) return;
+
+    setLoading(true);
+    try {
+      const newMessage = {
+        sender: myContactName,
+        message: inputMessage.trim(),
+        timestamp: new Date(),
+      };
+
+      const messagesCollectionRef = collection(db, `artifacts/${__app_id}/users/${userId}/chats/${currentChatId}/messages`);
+      await addDoc(messagesCollectionRef, newMessage);
+
+      const chatRef = doc(db, `artifacts/${__app_id}/users/${userId}/chats/${currentChatId}`);
+      await updateDoc(chatRef, {
+        lastMessageTimestamp: newMessage.timestamp,
+        summary: newMessage.message,
+      });
+
+      setInputMessage('');
+      setSystemMessage('ההודעה נשלחה בהצלחה ונשמרה ב-Firestore.');
+
+      if (JONI_SEND_API_URL !== "YOUR_JONI_SEND_API_ENDPOINT_HERE") {
+        console.log("Simulating sending message via JONI:", newMessage);
+      }
+
+    } catch (error) {
+      console.error("Error sending message:", error);
+      setSystemMessage(`שגיאה בשליחת ההודעה: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openOrderModal = useCallback(() => {
+    setShowOrderModal(true);
+    if (currentChatId) {
+      const selectedChat = chatSummaries.find(chat => chat.id === currentChatId);
+      const contact = contacts.find(c => c.id === selectedChat?.contactId);
+      if (contact && !contact.name.startsWith('קבוצה:')) {
+        setOrderForm(prev => ({ ...prev, customer: contact.name }));
+      }
+    }
+  }, [currentChatId, chatSummaries, contacts]);
+
+  const handleOrderSubmit = async () => {
+    if (!orderForm.customer || !orderForm.items || !db || !userId) {
+      setSystemMessage('אנא מלא את כל השדות החובה בהזמנה.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const contact = contacts.find(c => c.name === orderForm.customer);
+      let orderChatId = currentChatId;
+
+      if (!orderChatId && contact) {
+          // If no chat is selected but a contact exists, find or create a chat for them
+          const existingChatQuery = query(collection(db, `artifacts/${__app_id}/users/${userId}/chats`), where('contactId', "==", contact.id));
+          const existingChatSnapshot = await getDocs(existingChatQuery);
+          if (!existingChatSnapshot.empty) {
+              orderChatId = existingChatSnapshot.docs[0].id;
+          } else {
+              const newChatRef = await addDoc(collection(db, `artifacts/${__app_id}/users/${userId}/chats`), {
+                  name: contact.name,
+                  contactId: contact.id,
+                  lastMessageTimestamp: new Date(),
+                  summary: 'הזמנה נוצרה',
+                  createdAt: serverTimestamp(),
+              });
+              orderChatId = newChatRef.id;
+              setCurrentChatId(orderChatId); // Make this the current chat
+          }
+      } else if (!orderChatId && !contact) {
+          setSystemMessage('לא ניתן ליצור הזמנה ללא צ"אט נבחר או לקוח קיים.');
+          setLoading(false);
+          return;
+      }
+
+      await addDoc(collection(db, `artifacts/${__app_id}/users/${userId}/orders`), {
+        chatId: orderChatId,
+        customer: orderForm.customer,
+        items: orderForm.items,
+        date: orderForm.date ? new Date(orderForm.date) : serverTimestamp(),
+        notes: orderForm.notes,
+        status: 'חדש',
+        createdAt: serverTimestamp(),
+      });
+
+      const orderMessage = `📦 הזמנה חדשה עבור ${orderForm.customer}:\nפריטים: ${orderForm.items}\nתאריך: ${orderForm.date || 'לא צוין'}\nהערות: ${orderForm.notes || 'אין'}`;
+      const newMessage = {
+        sender: myContactName,
+        message: orderMessage,
+        timestamp: new Date(),
+      };
+      const messagesCollectionRef = collection(db, `artifacts/${__app_id}/users/${userId}/chats/${orderChatId}/messages`);
+      await addDoc(messagesCollectionRef, newMessage);
+
+      const chatRef = doc(db, `artifacts/${__app_id}/users/${userId}/chats/${orderChatId}`);
+      await updateDoc(chatRef, {
+        lastMessageTimestamp: newMessage.timestamp,
+        summary: newMessage.message,
+      });
+
+      setOrderForm({ customer: '', items: '', date: '', notes: '' });
+      setShowOrderModal(false);
+      setSystemMessage('הזמנה נוצרה ונשמרה בהצלחה!');
+    } catch (error) {
+      console.error("Error creating order:", error);
+      setSystemMessage(`שגיאה ביצירת הזמנה: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openReminderModal = useCallback((contactId = null) => {
+    setShowReminderModal(true);
+    setReminderForm(prev => ({ ...prev, contactId: contactId }));
+    if (contactId) {
+      const contact = contacts.find(c => c.id === contactId);
+      setReminderForm(prev => ({ ...prev, title: `תזכורת עבור ${contact?.name || ''}` }));
+    }
+  }, [contacts]);
+
+  const handleReminderSubmit = async () => {
+    if (!reminderForm.title || !reminderForm.date || !reminderForm.time || !db || !userId) {
+      setSystemMessage('אנא מלא את כל השדות החובה בתזכורת.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const reminderDateTime = new Date(`${reminderForm.date}T${reminderForm.time}`);
+      await addDoc(collection(db, `artifacts/${__app_id}/users/${userId}/reminders`), {
+        title: reminderForm.title,
+        dateTime: reminderDateTime,
+        notes: reminderForm.notes,
+        contactId: reminderForm.contactId,
+        status: 'פעיל',
+        createdAt: serverTimestamp(),
+      });
+
+      if (currentChatId) {
+        const reminderMessage = `🔔 תזכורת חדשה: ${reminderForm.title}\nמועד: ${new Date(reminderDateTime).toLocaleString('he-IL')}\nהערות: ${reminderForm.notes || 'אין'}`;
+        const newMessage = {
+          sender: myContactName,
+          message: reminderMessage,
+          timestamp: new Date(),
+        };
+        const messagesCollectionRef = collection(db, `artifacts/${__app_id}/users/${userId}/chats/${currentChatId}/messages`);
+        await addDoc(messagesCollectionRef, newMessage);
+
+        const chatRef = doc(db, `artifacts/${__app_id}/users/${userId}/chats/${currentChatId}`);
+        await updateDoc(chatRef, {
+          lastMessageTimestamp: newMessage.timestamp,
+          summary: newMessage.message,
+        });
+      }
+
+      setReminderForm({ title: '', date: '', time: '', notes: '', contactId: null });
+      setShowReminderModal(false);
+      setSystemMessage('תזכורת נוצרה ונשמרה בהצלחה!');
+    } catch (error) {
+      console.error("Error creating reminder:", error);
+      setSystemMessage(`שגיאה ביצירת תזכורת: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const applyHighlighting = (text) => {
+    let highlightedText = text;
+    highlightRules.forEach(rule => {
+      highlightedText = highlightedText.replace(rule.regex, (match) => `<span class="${rule.className}">${match}</span>`);
+    });
+    return <span dangerouslySetInnerHTML={{ __html: highlightedText }} />;
+  };
+
+  const currentChatName = chatSummaries.find(chat => chat.id === currentChatId)?.name || 'בחר צ"אט';
+  const currentChatContact = chatSummaries.find(chat => chat.id === currentChatId);
+  const currentContactProfilePic = contacts.find(c => c.id === currentChatContact?.contactId)?.profilePic || 'https://placehold.co/100x100/A3A9B2/FFFFFF?text=P';
+
+  const handleContactClick = (contact) => {
+    setSelectedContact(contact);
+    setShowContactDetailModal(true);
+    // Find or create a chat for this contact
+    const existingChat = chatSummaries.find(chat => chat.contactId === contact.id);
+    if (existingChat) {
+      setCurrentChatId(existingChat.id);
+    } else {
+      // Option to create a new chat when viewing contact details
+      // For now, keep currentChatId as is until user explicitly starts a new chat from here
+    }
+  };
+
+  const handleCreateNewContact = async () => {
+    if (!newContactForm.name.trim() || !db || !userId) {
+      setSystemMessage('אנא הזן שם עבור איש הקשר החדש.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const contactData = {
+        name: newContactForm.name.trim(),
+        whatsappNumber: newContactForm.whatsappNumber.trim(),
+        profilePic: newContactForm.profilePic.trim() || `https://placehold.co/100x100/F0F2F5/A3A9B2?text=${newContactForm.name.charAt(0)}`,
+        email: newContactForm.email.trim(),
+        address: newContactForm.address.trim(),
+        socialMedia: newContactForm.socialMedia.trim(),
+        createdAt: serverTimestamp(),
+      };
+      await addDoc(collection(db, `artifacts/${__app_id}/users/${userId}/contacts`), contactData);
+      setNewContactForm({ name: '', whatsappNumber: '', profilePic: '', email: '', address: '', socialMedia: '' });
+      setShowAddContactModal(false);
+      setSystemMessage('איש קשר חדש נוצר בהצלחה!');
+    } catch (error) {
+      console.error("Error creating new contact:", error);
+      setSystemMessage(`שגיאה ביצירת איש קשר: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUploadChatForNewContact = async (fileContent) => {
+    if (!selectedContact || !db || !userId) {
+      setSystemMessage('יש לבחור איש קשר לפני העלאת צ"אט.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const parsedMessages = parseWhatsAppChat(fileContent);
+      if (parsedMessages.length === 0) {
+        setSystemMessage('לא נמצאו הודעות בקובץ הגיבוי. ודא שהפורמט נכון.');
+        setLoading(false);
+        return;
+      }
+
+      // Create a new chat for this contact
+      const chatRef = await addDoc(collection(db, `artifacts/${__app_id}/users/${userId}/chats`), {
+        name: selectedContact.name,
+        contactId: selectedContact.id,
+        lastMessageTimestamp: parsedMessages[parsedMessages.length - 1].timestamp,
+        summary: parsedMessages[parsedMessages.length - 1].message,
+        createdAt: serverTimestamp(),
+      });
+      setCurrentChatId(chatRef.id);
+
+      const messagesCollectionRef = collection(db, `artifacts/${__app_id}/users/${userId}/chats/${chatRef.id}/messages`);
+      for (const msg of parsedMessages) {
+        await addDoc(messagesCollectionRef, {
+          sender: msg.sender,
+          message: msg.message,
+          timestamp: msg.timestamp,
+          originalTimestamp: msg.originalTimestamp
+        });
+      }
+      setShowUploadChatModal(false);
+      setSystemMessage('קובץ גיבוי צ"אט נטען בהצלחה לאיש הקשר!');
+    } catch (error) {
+      console.error("Error uploading chat for new contact:", error);
+      setSystemMessage(`שגיאה בהעלאת צ"אט: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePaste = useCallback(async (event) => {
+    if (currentTab !== 'chats' || !currentChatId) return;
+
+    const pastedText = event.clipboardData.getData('text');
+    if (pastedText) {
+      // Simulate processing pasted text as a new message from the other person
+      setLoading(true);
+      try {
+        const newMessage = {
+          sender: currentChatName, // Assume pasted text is from the other person in the chat
+          message: pastedText,
+          timestamp: new Date(),
+        };
+        const messagesCollectionRef = collection(db, `artifacts/${__app_id}/users/${userId}/chats/${currentChatId}/messages`);
+        await addDoc(messagesCollectionRef, newMessage);
+
+        const chatRef = doc(db, `artifacts/${__app_id}/users/${userId}/chats/${currentChatId}`);
+        await updateDoc(chatRef, {
+          lastMessageTimestamp: newMessage.timestamp,
+          summary: newMessage.message,
+        });
+        setSystemMessage('הודעה שהודבקה נקלטה בהצלחה ושויכה לצ"אט.');
+      } catch (error) {
+        console.error("Error processing pasted text:", error);
+        setSystemMessage(`שגיאה בעיבוד טקסט שהודבק: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }
+  }, [currentChatId, currentChatName, db, userId, currentTab]);
+
+  useEffect(() => {
+    const inputElement = chatInputRef.current;
+    if (inputElement && currentTab === 'chats') {
+      inputElement.addEventListener('paste', handlePaste);
+    }
+    return () => {
+      if (inputElement) {
+        inputElement.removeEventListener('paste', handlePaste);
+      }
+    };
+  }, [handlePaste, currentTab]);
+
+  const filteredContacts = contacts.filter(contact =>
+    contact.name.toLowerCase().includes(contactSearchTerm.toLowerCase()) ||
+    contact.whatsappNumber.includes(contactSearchTerm)
+  );
+
+
+  if (!isAuthReady) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-100">
+        <div className="text-center text-gray-700">טוען את האפליקציה...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-screen w-full font-sans text-right bg-gray-900" dir="rtl">
+      {/* Sidebar for chat list or contacts list */}
+      <div className={`transition-all duration-300 ${isSidebarOpen ? 'w-full md:w-1/3 lg:w-1/4' : 'w-0'} bg-gray-800 text-white flex-shrink-0 flex flex-col overflow-hidden rounded-lg shadow-xl m-2`}>
+        <div className="p-4 bg-gray-900 flex justify-between items-center rounded-t-lg">
+          <div className="flex items-center space-x-2 space-x-reverse">
+            <img src={myProfilePic} alt="My Profile" className="w-10 h-10 rounded-full object-cover border-2 border-green-400" />
+            <h2 className="text-xl font-bold">{myContactName}</h2>
+          </div>
+          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 rounded-full hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Tab Navigation for Sidebar */}
+        <div className="flex justify-around bg-gray-700 p-2 border-b border-gray-600">
+          <button
+            className={`flex-1 p-2 rounded-lg font-semibold ${currentTab === 'chats' ? 'bg-green-600 text-white shadow-md' : 'text-gray-300 hover:bg-gray-600'}`}
+            onClick={() => setCurrentTab('chats')}
+          >
+            הודעות
+          </button>
+          <button
+            className={`flex-1 p-2 rounded-lg font-semibold ${currentTab === 'contacts' ? 'bg-green-600 text-white shadow-md' : 'text-gray-300 hover:bg-gray-600'}`}
+            onClick={() => setCurrentTab('contacts')}
+          >
+            אנשי קשר
+          </button>
+        </div>
+
+        {currentTab === 'chats' && (
+          <>
+            <div className="p-4 border-b border-gray-700">
+              <label className="block text-sm font-medium text-gray-300 mb-2" htmlFor="whatsappFileInput">
+                העלה גיבוי צ'אט (.txt) / אנשי קשר (.vcf)
+              </label>
+              <input
+                type="file"
+                id="whatsappFileInput"
+                accept=".txt,.vcf"
+                onChange={handleFileSelect}
+                className="w-full text-sm text-gray-300 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-500 file:text-white hover:file:bg-blue-600 cursor-pointer"
+                disabled={loading}
+              />
             </div>
-        </header>
-
-        <main class="chat-area" id="chatArea">
-            <div class="text-center text-gray-500 my-4">
-                <p>אנא בחר קובץ גיבוי של WhatsApp (.txt) כדי לצפות בשיחות שלך.</p>
-                <p>הקובץ צריך להיות בפורמט: `[DD/MM/YYYY, HH:MM:SS] Sender: Message`</p>
-                <p>ניתן לשנות את השם "השם שלי" בקוד כדי להתאים לשם שלך בגיבוי.</p>
+            <div className="flex-grow overflow-y-auto custom-scrollbar">
+              {chatSummaries.map((chat) => (
+                <div
+                  key={chat.id}
+                  className={`p-4 border-b border-gray-700 cursor-pointer hover:bg-gray-700 flex items-center space-x-3 space-x-reverse ${currentChatId === chat.id ? 'bg-gray-700' : ''}`}
+                  onClick={() => setCurrentChatId(chat.id)}
+                >
+                  <img
+                    src={contacts.find(c => c.id === chat.contactId)?.profilePic || `https://placehold.co/100x100/A3A9B2/FFFFFF?text=${chat.name.charAt(0)}`}
+                    alt={chat.name}
+                    className="w-10 h-10 rounded-full object-cover"
+                    onError={(e) => { e.target.onerror = null; e.target.src = `https://placehold.co/100x100/A3A9B2/FFFFFF?text=${chat.name.charAt(0)}`; }}
+                  />
+                  <div>
+                    <div className="font-semibold text-lg text-green-300">{chat.name}</div>
+                    <div className="text-sm text-gray-400 truncate max-w-xs">{applyHighlighting(chat.summary)}</div>
+                    {chat.lastMessageTimestamp && (
+                      <div className="text-xs text-gray-500 mt-1">
+                        {new Date(chat.lastMessageTimestamp.toDate()).toLocaleDateString('he-IL')} {new Date(chat.lastMessageTimestamp.toDate()).toLocaleTimeString('he-IL')}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
-            <!-- Messages will be rendered here -->
-        </main>
+          </>
+        )}
 
-        <section class="file-input-section">
-            <input type="file" id="whatsappFile" accept=".txt">
-            <button id="uploadToSheetBtn" class="upload-button mt-4" disabled>העלה לגיליון Google</button>
-            <p id="loadingStatus" class="loading-text hidden">טוען ומוציא הודעות...</p>
-            <p id="uploadStatus" class="loading-text hidden"></p>
-        </section>
-    </div>
+        {currentTab === 'contacts' && (
+          <>
+            <div className="p-4 border-b border-gray-700 flex flex-col gap-2">
+                <input
+                    type="text"
+                    placeholder="חפש איש קשר..."
+                    className="w-full p-2 rounded-lg bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={contactSearchTerm}
+                    onChange={(e) => setContactSearchTerm(e.target.value)}
+                    dir="rtl"
+                />
+                <button
+                    onClick={() => setShowAddContactModal(true)}
+                    className="p-2 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors duration-200 flex items-center justify-center text-sm"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 ml-2" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
+                    </svg>
+                    הוסף איש קשר חדש
+                </button>
+            </div>
+            <div className="flex-grow overflow-y-auto custom-scrollbar">
+              {filteredContacts.map((contact) => (
+                <div
+                  key={contact.id}
+                  className="p-4 border-b border-gray-700 hover:bg-gray-700 flex items-center space-x-3 space-x-reverse"
+                >
+                  <img
+                    src={contact.profilePic || `https://placehold.co/100x100/A3A9B2/FFFFFF?text=${contact.name.charAt(0)}`}
+                    alt={contact.name}
+                    className="w-12 h-12 rounded-full object-cover border-2 border-gray-600 cursor-pointer"
+                    onClick={() => handleContactClick(contact)}
+                    onError={(e) => { e.target.onerror = null; e.target.src = `https://placehold.co/100x100/A3A9B2/FFFFFF?text=${contact.name.charAt(0)}`; }}
+                  />
+                  <div className="flex-grow cursor-pointer" onClick={() => handleContactClick(contact)}>
+                    <div className="font-semibold text-lg text-green-300">{contact.name}</div>
+                    <div className="text-sm text-gray-400">{contact.whatsappNumber}</div>
+                  </div>
+                  <div className="flex space-x-2 space-x-reverse">
+                    {!chatSummaries.some(chat => chat.contactId === contact.id) && (
+                      <button
+                        onClick={() => {setSelectedContact(contact); setShowUploadChatModal(true);}}
+                        className="p-2 bg-gray-600 text-white rounded-full hover:bg-gray-500 transition-colors duration-200"
+                        title="העלה צ'אט לאיש קשר זה"
+                      >
+                         ➕💬
+                      </button>
+                    )}
+                    <button
+                      onClick={() => openReminderModal(contact.id)}
+                      className="p-2 bg-purple-500 text-white rounded-full hover:bg-purple-600 transition-colors duration-200"
+                      title="צור תזכורת"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </button>
+                    {/* Placeholder for Office 365 Meeting */}
+                    <button
+                      onClick={() => createOffice365Meeting({ contact: contact.name, date: new Date() })}
+                      className="p-2 bg-indigo-500 text-white rounded-full hover:bg-indigo-600 transition-colors duration-200"
+                      title="צור פגישת 365"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        <div className="p-4 bg-gray-900 text-sm border-t border-gray-700 rounded-b-lg">
+          <p>המזהה שלך: {userId || 'טוען...'}</p>
+        </div>
+      </div>
 
-    <script>
-        const whatsappFileInput = document.getElementById('whatsappFile');
-        const chatArea = document.getElementById('chatArea');
-        const loadingStatus = document.getElementById('loadingStatus');
-        const uploadStatus = document.getElementById('uploadStatus');
-        const uploadToSheetBtn = document.getElementById('uploadToSheetBtn');
+      {/* Main chat window */}
+      <div className={`flex flex-col flex-grow ${isSidebarOpen ? 'md:w-2/3 lg:w-3/4' : 'w-full'} bg-gray-100 rounded-lg shadow-lg m-2`}>
+        {/* Chat header */}
+        <div className="bg-gradient-to-r from-teal-500 to-green-600 text-white p-4 rounded-t-lg shadow-md flex justify-between items-center">
+          <div className="flex items-center space-x-3 space-x-reverse">
+             <img
+              src={currentContactProfilePic}
+              alt={currentChatName}
+              className="w-10 h-10 rounded-full object-cover border-2 border-white"
+              onError={(e) => { e.target.onerror = null; e.target.src = `https://placehold.co/100x100/A3A9B2/FFFFFF?text=${currentChatName.charAt(0)}`; }}
+            />
+            <h1 className="text-xl font-bold">{currentChatName}</h1>
+          </div>
+          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="md:hidden p-2 rounded-full hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+        </div>
 
-        // IMPORTANT: Change this to your name as it appears in the WhatsApp backup file
-        // Messages sent by this name will appear as "outgoing" (green bubble).
-        const myContactName = "השם שלי"; 
+        {/* Message display area */}
+        <div className="flex-grow p-4 overflow-y-auto bg-gray-50 custom-scrollbar relative">
+          {messages.length === 0 && (
+            <p className="text-center text-gray-500 mt-10">
+              {currentChatId ? "הצ'אט הזה ריק. התחל שיחה." : "בחר צ'אט מהצד, או העלה קובץ גיבוי של WhatsApp."}
+            </p>
+          )}
+          {messages.map((msg) => (
+            <div
+              key={msg.id}
+              className={`flex mb-4 ${msg.sender === myContactName ? 'justify-end' : 'justify-start'}`}
+            >
+              <div className={`relative max-w-[80%] px-4 py-2 rounded-lg shadow ${msg.sender === myContactName ? 'bg-green-200 text-right mr-2' : 'bg-white text-left ml-2'}`}>
+                <div className="font-bold text-sm mb-1">{msg.sender === myContactName ? 'אתה' : msg.sender}</div>
+                <p className="text-gray-800" dir="rtl">{applyHighlighting(msg.message)}</p>
+                <div className="text-xs text-gray-500 mt-1 text-left">
+                  {msg.timestamp && new Date(msg.timestamp.toDate()).toLocaleTimeString('he-IL')}
+                </div>
+              </div>
+            </div>
+          ))}
+          <div ref={messagesEndRef} />
+        </div>
 
-        // Google Apps Script endpoint URL for POST requests (same as doGet if deployed as one script)
-        // YOU MUST REPLACE THIS WITH YOUR DEPLOYED GOOGLE APPS SCRIPT .exec URL
-        const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxGctKG3baK1aQKA-M8KaG0I7rKqOBDmLvWZqzJ3x0hW5lVqBTgnN5b2WXHzByV5VEA/exec';
-        
-        let allParsedMessages = []; // Store parsed messages globally for upload
+        {/* System messages and loading indicator */}
+        {systemMessage && (
+          <div className="p-2 text-sm text-center bg-blue-100 text-blue-800 border-t border-blue-200">
+            {systemMessage}
+          </div>
+        )}
+        {loading && (
+          <div className="p-2 text-sm text-center bg-yellow-100 text-yellow-800 border-t border-yellow-200">
+            טוען... אנא המתן.
+          </div>
+        )}
 
-        whatsappFileInput.addEventListener('change', handleFileSelect);
-        uploadToSheetBtn.addEventListener('click', uploadToGoogleSheet);
+        {/* Message input and action buttons */}
+        <div className="p-4 bg-gray-200 rounded-b-lg shadow-inner flex items-center space-x-2 space-x-reverse">
+          <button
+            onClick={openOrderModal}
+            className="p-3 bg-blue-500 text-white rounded-full hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors duration-200"
+            title="צור הזמנה חדשה"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+          </button>
+          <button
+            onClick={() => openReminderModal(currentChatContact?.contactId)}
+            className="p-3 bg-purple-500 text-white rounded-full hover:bg-purple-600 focus:outline-none focus:ring-2 focus:ring-purple-500 transition-colors duration-200"
+            title="צור תזכורת חדשה"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
+          <input
+            type="text"
+            ref={chatInputRef}
+            className="flex-grow p-3 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-200"
+            placeholder="הקלד הודעה..."
+            value={inputMessage}
+            onChange={(e) => setInputMessage(e.target.value)}
+            onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+            disabled={loading || !currentChatId}
+            dir="rtl"
+          />
+          <button
+            onClick={handleSendMessage}
+            className="p-3 bg-green-500 text-white rounded-full hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 transition-colors duration-200"
+            disabled={loading || !currentChatId || !inputMessage.trim()}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+            </svg>
+          </button>
+        </div>
+      </div>
 
-        /**
-         * Handles the selection of a file, reads its content, and parses it.
-         * @param {Event} event - The change event from the file input.
-         */
-        async function handleFileSelect(event) {
-            const file = event.target.files[0];
-            if (!file) {
-                uploadToSheetBtn.disabled = true;
-                return;
-            }
+      {/* Order Creation Modal */}
+      {showOrderModal && (
+        <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-6 shadow-xl w-full max-w-md" dir="rtl">
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">צור הזמנה חדשה</h2>
+            <div className="mb-4">
+              <label htmlFor="customerName" className="block text-gray-700 text-sm font-bold mb-2">
+                שם לקוח:
+              </label>
+              <input
+                type="text"
+                id="customerName"
+                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                value={orderForm.customer}
+                onChange={(e) => setOrderForm({ ...orderForm, customer: e.target.value })}
+                required
+              />
+            </div>
+            <div className="mb-4">
+              <label htmlFor="orderItems" className="block text-gray-700 text-sm font-bold mb-2">
+                פרטי הזמנה (לדוגמה: מלט x10, בלוק x50):
+              </label>
+              <textarea
+                id="orderItems"
+                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline h-24"
+                value={orderForm.items}
+                onChange={(e) => setOrderForm({ ...orderForm, items: e.target.value })}
+                required
+              ></textarea>
+            </div>
+            <div className="mb-4">
+              <label htmlFor="orderDate" className="block text-gray-700 text-sm font-bold mb-2">
+                תאריך אספקה:
+              </label>
+              <input
+                type="date"
+                id="orderDate"
+                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                value={orderForm.date}
+                onChange={(e) => setOrderForm({ ...orderForm, date: e.target.value })}
+              />
+            </div>
+            <div className="mb-6">
+              <label htmlFor="orderNotes" className="block text-gray-700 text-sm font-bold mb-2">
+                הערות:
+              </label>
+              <textarea
+                id="orderNotes"
+                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline h-20"
+                value={orderForm.notes}
+                onChange={(e) => setOrderForm({ ...orderForm, notes: e.target.value })}
+              ></textarea>
+            </div>
+            <div className="flex justify-end space-x-2 space-x-reverse">
+              <button
+                onClick={() => setShowOrderModal(false)}
+                className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-full focus:outline-none focus:shadow-outline transition-colors duration-200"
+              >
+                ביטול
+              </button>
+              <button
+                onClick={handleOrderSubmit}
+                className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-full focus:outline-none focus:shadow-outline transition-colors duration-200"
+                disabled={loading}
+              >
+                {loading ? 'יוצר...' : 'צור הזמנה'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
-            loadingStatus.textContent = 'טוען ומוציא הודעות...';
-            loadingStatus.classList.remove('hidden');
-            uploadStatus.classList.add('hidden'); // Clear previous upload status
-            chatArea.innerHTML = ''; // Clear previous messages
-            allParsedMessages = []; // Clear previous parsed messages
+      {/* Reminder Creation Modal */}
+      {showReminderModal && (
+        <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-6 shadow-xl w-full max-w-md" dir="rtl">
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">צור תזכורת חדשה</h2>
+            <div className="mb-4">
+              <label htmlFor="reminderTitle" className="block text-gray-700 text-sm font-bold mb-2">
+                כותרת:
+              </label>
+              <input
+                type="text"
+                id="reminderTitle"
+                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                value={reminderForm.title}
+                onChange={(e) => setReminderForm({ ...reminderForm, title: e.target.value })}
+                required
+              />
+            </div>
+            <div className="mb-4">
+              <label htmlFor="reminderDate" className="block text-gray-700 text-sm font-bold mb-2">
+                תאריך:
+              </label>
+              <input
+                type="date"
+                id="reminderDate"
+                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                value={reminderForm.date}
+                onChange={(e) => setReminderForm({ ...reminderForm, date: e.target.value })}
+                required
+              />
+            </div>
+            <div className="mb-4">
+              <label htmlFor="reminderTime" className="block text-gray-700 text-sm font-bold mb-2">
+                שעה:
+              </label>
+              <input
+                type="time"
+                id="reminderTime"
+                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                value={reminderForm.time}
+                onChange={(e) => setReminderForm({ ...reminderForm, time: e.target.value })}
+                required
+              />
+            </div>
+            <div className="mb-6">
+              <label htmlFor="reminderNotes" className="block text-gray-700 text-sm font-bold mb-2">
+                הערות:
+              </label>
+              <textarea
+                id="reminderNotes"
+                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline h-20"
+                value={reminderForm.notes}
+                onChange={(e) => setReminderForm({ ...reminderForm, notes: e.target.value })}
+              ></textarea>
+            </div>
+            <div className="flex justify-end space-x-2 space-x-reverse">
+              <button
+                onClick={() => setShowReminderModal(false)}
+                className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-full focus:outline-none focus:shadow-outline transition-colors duration-200"
+              >
+                ביטול
+              </button>
+              <button
+                onClick={handleReminderSubmit}
+                className="bg-purple-500 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-full focus:outline-none focus:shadow-outline transition-colors duration-200"
+                disabled={loading}
+              >
+                {loading ? 'יוצר...' : 'צור תזכורת'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
-            const reader = new FileReader();
+      {/* Contact Detail Modal (Internal Page Simulation) */}
+      {showContactDetailModal && selectedContact && (
+        <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-6 shadow-xl w-full max-w-2xl" dir="rtl">
+            <div className="flex justify-between items-center mb-4 border-b pb-4">
+              <h2 className="text-2xl font-bold text-gray-800">פרטי איש קשר: {selectedContact.name}</h2>
+              <button
+                onClick={() => setShowContactDetailModal(false)}
+                className="p-2 rounded-full hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-300"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="flex items-center space-x-4 space-x-reverse mb-6">
+              <img
+                src={selectedContact.profilePic || `https://placehold.co/150x150/A3A9B2/FFFFFF?text=${selectedContact.name.charAt(0)}`}
+                alt={selectedContact.name}
+                className="w-24 h-24 rounded-full object-cover border-4 border-teal-500"
+                onError={(e) => { e.target.onerror = null; e.target.src = `https://placehold.co/150x150/A3A9B2/FFFFFF?text=${selectedContact.name.charAt(0)}`; }}
+              />
+              <div>
+                <p className="text-xl font-semibold text-gray-800">{selectedContact.name}</p>
+                <p className="text-gray-600">{selectedContact.whatsappNumber}</p>
+                {selectedContact.email && <p className="text-gray-600">אימייל: {selectedContact.email}</p>}
+                {selectedContact.address && <p className="text-gray-600">כתובת: {selectedContact.address}</p>}
+                {selectedContact.socialMedia && <p className="text-gray-600">רשתות חברתיות: <a href={selectedContact.socialMedia} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">{selectedContact.socialMedia}</a></p>}
+              </div>
+            </div>
 
-            reader.onload = async (e) => {
-                const text = e.target.result;
-                try {
-                    allParsedMessages = parseWhatsAppChat(text);
-                    renderChatMessages(allParsedMessages);
-                    uploadToSheetBtn.disabled = false; // Enable upload button after successful parse
-                } catch (error) {
-                    console.error("Error parsing chat file:", error);
-                    chatArea.innerHTML = `<div class="text-center text-red-500 my-4">
-                                            <p>שגיאה בניתוח קובץ הגיבוי. ודא שהפורמט נכון.</p>
-                                            <p>הפורמט הצפוי הוא: <strong>[DD/MM/YYYY, HH:MM:SS] Sender: Message</strong></p>
-                                            <p>ייתכן שתצטרך להתאים את לוגיקת הניתוח בקוד ה-JavaScript.</p>
-                                          </div>`;
-                    uploadToSheetBtn.disabled = true;
-                } finally {
-                    loadingStatus.classList.add('hidden');
-                    chatArea.scrollTop = chatArea.scrollHeight; // Scroll to bottom
-                }
-            };
+            <h3 className="text-xl font-bold mb-3 text-gray-800">פעולות:</h3>
+            <div className="flex flex-wrap gap-3 mb-6">
+              <button
+                onClick={() => {
+                  setShowContactDetailModal(false);
+                  openReminderModal(selectedContact.id);
+                }}
+                className="p-3 bg-purple-500 text-white rounded-full hover:bg-purple-600 transition-colors duration-200 flex items-center"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 ml-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                צור תזכורת
+              </button>
+              <button
+                onClick={() => {
+                  setShowContactDetailModal(false);
+                  createOffice365Meeting({ contact: selectedContact.name, date: new Date() }); // Placeholder
+                }}
+                className="p-3 bg-indigo-500 text-white rounded-full hover:bg-indigo-600 transition-colors duration-200 flex items-center"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 ml-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                זימון פגישת 365
+              </button>
+              <button
+                onClick={() => {
+                  setShowContactDetailModal(false);
+                  uploadToGoogleDrive(new File(["dummy content"], "example.txt"), selectedContact.id); // Placeholder for actual file object
+                  setSystemMessage(`העלאת קובץ ל-Google Drive עבור ${selectedContact.name} (סימולציה)...`);
+                }}
+                className="p-3 bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors duration-200 flex items-center"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 ml-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+                העלה מדיה ל-Drive
+              </button>
+            </div>
 
-            reader.onerror = (e) => {
-                console.error("Error reading file:", e);
-                loadingStatus.classList.add('hidden');
-                uploadStatus.classList.add('hidden');
-                chatArea.innerHTML = `<div class="text-center text-red-500 my-4"><p>שגיאה בקריאת הקובץ.</p></div>`;
-                uploadToSheetBtn.disabled = true;
-            };
+            <h3 className="text-xl font-bold mb-3 text-gray-800">היסטוריית צ'אט:</h3>
+            <div className="max-h-60 overflow-y-auto border border-gray-300 rounded-lg p-3 bg-gray-50 custom-scrollbar">
+              {chatSummaries.filter(chat => chat.contactId === selectedContact.id).length > 0 ? (
+                messages.filter(msg => chatSummaries.find(chat => chat.id === currentChatId && chat.contactId === selectedContact.id)).map((msg) => (
+                  <div key={msg.id} className={`flex mb-2 ${msg.sender === myContactName ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[80%] px-3 py-1 rounded-lg shadow-sm text-sm ${msg.sender === myContactName ? 'bg-green-100' : 'bg-gray-100'}`}>
+                      <span className="font-bold">{msg.sender === myContactName ? 'אתה' : msg.sender}: </span>
+                      <span dangerouslySetInnerHTML={{ __html: applyHighlighting(msg.message) }} />
+                      <div className="text-xs text-gray-500 mt-1 text-left">
+                        {msg.timestamp && new Date(msg.timestamp.toDate()).toLocaleTimeString('he-IL')}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p className="text-center text-gray-500">אין היסטוריית צ"אט עבור איש קשר זה.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
-            reader.readAsText(file);
-        }
+      {/* Add New Contact Modal */}
+      {showAddContactModal && (
+        <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-6 shadow-xl w-full max-w-md" dir="rtl">
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">הוסף איש קשר חדש</h2>
+            <div className="mb-4">
+              <label htmlFor="newContactName" className="block text-gray-700 text-sm font-bold mb-2">
+                שם:
+              </label>
+              <input
+                type="text"
+                id="newContactName"
+                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                value={newContactForm.name}
+                onChange={(e) => setNewContactForm({ ...newContactForm, name: e.target.value })}
+                required
+              />
+            </div>
+            <div className="mb-4">
+              <label htmlFor="newContactNumber" className="block text-gray-700 text-sm font-bold mb-2">
+                מספר וואטסאפ:
+              </label>
+              <input
+                type="text"
+                id="newContactNumber"
+                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                value={newContactForm.whatsappNumber}
+                onChange={(e) => setNewContactForm({ ...newContactForm, whatsappNumber: e.target.value })}
+              />
+            </div>
+            <div className="mb-4">
+              <label htmlFor="newContactProfilePic" className="block text-gray-700 text-sm font-bold mb-2">
+                לינק לתמונת פרופיל:
+              </label>
+              <input
+                type="text"
+                id="newContactProfilePic"
+                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                value={newContactForm.profilePic}
+                onChange={(e) => setNewContactForm({ ...newContactForm, profilePic: e.target.value })}
+              />
+            </div>
+            <div className="mb-4">
+              <label htmlFor="newContactEmail" className="block text-gray-700 text-sm font-bold mb-2">
+                אימייל:
+              </label>
+              <input
+                type="email"
+                id="newContactEmail"
+                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                value={newContactForm.email}
+                onChange={(e) => setNewContactForm({ ...newContactForm, email: e.target.value })}
+              />
+            </div>
+            <div className="mb-4">
+              <label htmlFor="newContactAddress" className="block text-gray-700 text-sm font-bold mb-2">
+                כתובת:
+              </label>
+              <input
+                type="text"
+                id="newContactAddress"
+                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                value={newContactForm.address}
+                onChange={(e) => setNewContactForm({ ...newContactForm, address: e.target.value })}
+              />
+            </div>
+            <div className="mb-6">
+              <label htmlFor="newContactSocialMedia" className="block text-gray-700 text-sm font-bold mb-2">
+                לינק לרשתות חברתיות:
+              </label>
+              <input
+                type="text"
+                id="newContactSocialMedia"
+                className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                value={newContactForm.socialMedia}
+                onChange={(e) => setNewContactForm({ ...newContactForm, socialMedia: e.target.value })}
+              />
+            </div>
+            <div className="flex justify-end space-x-2 space-x-reverse">
+              <button
+                onClick={() => setShowAddContactModal(false)}
+                className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-full focus:outline-none focus:shadow-outline transition-colors duration-200"
+              >
+                ביטול
+              </button>
+              <button
+                onClick={handleCreateNewContact}
+                className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-full focus:outline-none focus:shadow-outline transition-colors duration-200"
+                disabled={loading}
+              >
+                {loading ? 'יוצר...' : 'צור איש קשר'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
-        /**
-         * Parses the raw text content of a WhatsApp chat backup file into an array of message objects.
-         * Assumes a common format: "[DD/MM/YYYY, HH:MM:SS] Sender: Message content"
-         * @param {string} rawText - The raw text content from the backup file.
-         * @returns {Array<Object>} An array of message objects { timestamp, sender, message }.
-         */
-        function parseWhatsAppChat(rawText) {
-            const messages = [];
-            // Regex to match common WhatsApp export format: [DD/MM/YYYY, HH:MM:SS] Sender: Message
-            // This regex tries to capture the timestamp, sender, and message content.
-            // It accounts for potential multiline messages where subsequent lines don't start with a timestamp.
-            const messageRegex = /^\[(\d{2}\/\d{2}\/\d{4}), (\d{2}:\d{2}:\d{2})\] ([^:]+): (.*)/;
-
-            const lines = rawText.split('\n');
-            let currentMessage = null;
-
-            lines.forEach(line => {
-                const match = line.match(messageRegex);
-                if (match) {
-                    // New message starts
-                    if (currentMessage) {
-                        messages.push(currentMessage);
-                    }
-                    currentMessage = {
-                        timestamp: `${match[1]} ${match[2]}`,
-                        sender: match[3].trim(),
-                        message: match[4].trim()
+      {/* Upload Chat for New Contact Modal */}
+      {showUploadChatModal && selectedContact && (
+        <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-6 shadow-xl w-full max-w-md" dir="rtl">
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">העלה צ'אט עבור {selectedContact.name}</h2>
+            <p className="mb-4 text-gray-700">
+              אנא העלה קובץ גיבוי צ'אט (.txt) כדי לייבא היסטוריית הודעות לאיש קשר זה.
+            </p>
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2" htmlFor="uploadChatFile">
+                בחר קובץ צ'אט:
+              </label>
+              <input
+                type="file"
+                id="uploadChatFile"
+                accept=".txt"
+                onChange={(e) => {
+                  const file = e.target.files[0];
+                  if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                      handleUploadChatForNewContact(event.target.result);
                     };
-                } else if (currentMessage) {
-                    // This line is a continuation of the previous message (e.g., multiline message)
-                    currentMessage.message += '\n' + line.trim();
-                }
-            });
+                    reader.readAsText(file);
+                  }
+                }}
+                className="w-full text-sm text-gray-700 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-green-500 file:text-white hover:file:bg-green-600 cursor-pointer"
+                disabled={loading}
+              />
+            </div>
+            <div className="flex justify-end space-x-2 space-x-reverse">
+              <button
+                onClick={() => setShowUploadChatModal(false)}
+                className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-full focus:outline-none focus:shadow-outline transition-colors duration-200"
+              >
+                ביטול
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
-            // Push the last message if it exists
-            if (currentMessage) {
-                messages.push(currentMessage);
-            }
-
-            return messages;
-        }
-
-        /**
-         * Renders an array of message objects into the chat area.
-         * @param {Array<Object>} messages - An array of message objects { timestamp, sender, message }.
-         */
-        function renderChatMessages(messages) {
-            chatArea.innerHTML = ''; // Clear previous content
-
-            if (messages.length === 0) {
-                chatArea.innerHTML = `<div class="text-center text-gray-500 my-4"><p>לא נמצאו הודעות בקובץ, או שפורמט הקובץ אינו תואם.</p></div>`;
-                return;
-            }
-
-            messages.forEach(msg => {
-                const isOutgoing = msg.sender === myContactName; // Check if sender is "me"
-                const messageDiv = document.createElement('div');
-                messageDiv.classList.add('message-bubble', isOutgoing ? 'message-outgoing' : 'message-incoming');
-
-                const senderSpan = document.createElement('div');
-                senderSpan.classList.add('message-sender');
-                // Only display sender name if it's not "me" or if we want to explicitly show "me"
-                senderSpan.textContent = isOutgoing ? 'אתה' : msg.sender;
-                messageDiv.appendChild(senderSpan);
-
-                const messageContent = document.createElement('div');
-                // Use innerHTML to preserve line breaks from parsed message
-                messageContent.innerHTML = msg.message.replace(/\n/g, '<br>');
-                messageDiv.appendChild(messageContent);
-
-                const timestampSpan = document.createElement('div');
-                timestampSpan.classList.add('message-timestamp');
-                timestampSpan.textContent = msg.timestamp;
-                messageDiv.appendChild(timestampSpan);
-
-                chatArea.appendChild(messageDiv);
-            });
-        }
-
-        /**
-         * Uploads the parsed messages to the Google Sheet via the Apps Script POST endpoint.
-         */
-        async function uploadToGoogleSheet() {
-            if (allParsedMessages.length === 0) {
-                uploadStatus.textContent = 'אין הודעות להעלאה.';
-                uploadStatus.classList.remove('hidden');
-                return;
-            }
-
-            uploadToSheetBtn.disabled = true;
-            loadingStatus.textContent = 'מעלה הודעות לגיליון Google...';
-            loadingStatus.classList.remove('hidden');
-            uploadStatus.classList.add('hidden'); // Clear previous status
-
-            try {
-                const response = await fetch(SCRIPT_URL, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    // Send a 'type' to distinguish this request from JONI webhook
-                    body: JSON.stringify({ type: 'whatsappBackup', messages: allParsedMessages }),
-                });
-
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-
-                const result = await response.json();
-                if (result.success) {
-                    uploadStatus.textContent = `הועלו ${result.count} הודעות בהצלחה לגיליון Google!`;
-                    uploadStatus.style.color = 'green';
-                } else {
-                    uploadStatus.textContent = `שגיאה בהעלאת הודעות: ${result.error}`;
-                    uploadStatus.style.color = 'red';
-                }
-                uploadStatus.classList.remove('hidden');
-
-            } catch (error) {
-                console.error('Error uploading messages to Google Sheet:', error);
-                uploadStatus.textContent = `שגיאה קריטית בהעלאה: ${error.message}. ודא שכתובת ה-Apps Script נכונה והרשאות הפריסה מאפשרות גישת POST.`;
-                uploadStatus.style.color = 'red';
-                uploadStatus.classList.remove('hidden');
-            } finally {
-                loadingStatus.classList.add('hidden');
-                uploadToSheetBtn.disabled = false;
-            }
-        }
-    </script>
-</body>
-</html>
+export default App;
