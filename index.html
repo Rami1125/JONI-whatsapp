@@ -57,6 +57,7 @@ const App = () => {
   const messagesEndRef = useRef(null);
   const chatInputRef = useRef(null); // Ref for the chat input field for paste event
   const [contactSearchTerm, setContactSearchTerm] = useState(''); // For contact search
+  const [showKeyboard, setShowKeyboard] = useState(false); // For virtual keyboard visibility
 
   const highlightRules = [
     { regex: /(הזמנה חדשה|דחוף|טיפול|לא טופל|צריך לבדוק)/g, className: 'bg-yellow-200 font-bold' },
@@ -659,6 +660,18 @@ const App = () => {
     contact.whatsappNumber.includes(contactSearchTerm)
   );
 
+  const handleKeyboardInput = (char) => {
+    setInputMessage(prev => prev + char);
+  };
+
+  const handleKeyboardDelete = () => {
+    setInputMessage(prev => prev.slice(0, -1));
+  };
+
+  const handleKeyboardEnter = () => {
+    handleSendMessage();
+  };
+
 
   if (!isAuthReady) {
     return (
@@ -764,53 +777,26 @@ const App = () => {
                     הוסף איש קשר חדש
                 </button>
             </div>
-            <div className="flex-grow overflow-y-auto custom-scrollbar">
+            <div className="flex-grow overflow-y-auto custom-scrollbar p-2 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-2">
               {filteredContacts.map((contact) => (
                 <div
                   key={contact.id}
-                  className="p-4 border-b border-gray-700 hover:bg-gray-700 flex items-center space-x-3 space-x-reverse"
+                  className="bg-gray-700 p-3 rounded-lg shadow-md flex flex-col items-center text-center cursor-pointer hover:bg-gray-600 transition-colors duration-200 relative group"
+                  onClick={() => handleContactClick(contact)}
                 >
                   <img
                     src={contact.profilePic || `https://placehold.co/100x100/A3A9B2/FFFFFF?text=${contact.name.charAt(0)}`}
                     alt={contact.name}
-                    className="w-12 h-12 rounded-full object-cover border-2 border-gray-600 cursor-pointer"
-                    onClick={() => handleContactClick(contact)}
+                    className="w-16 h-16 rounded-full object-cover border-2 border-green-400 mb-2"
                     onError={(e) => { e.target.onerror = null; e.target.src = `https://placehold.co/100x100/A3A9B2/FFFFFF?text=${contact.name.charAt(0)}`; }}
                   />
-                  <div className="flex-grow cursor-pointer" onClick={() => handleContactClick(contact)}>
-                    <div className="font-semibold text-lg text-green-300">{contact.name}</div>
-                    <div className="text-sm text-gray-400">{contact.whatsappNumber}</div>
-                  </div>
-                  <div className="flex space-x-2 space-x-reverse">
-                    {!chatSummaries.some(chat => chat.contactId === contact.id) && (
-                      <button
-                        onClick={() => {setSelectedContact(contact); setShowUploadChatModal(true);}}
-                        className="p-2 bg-gray-600 text-white rounded-full hover:bg-gray-500 transition-colors duration-200"
-                        title="העלה צ'אט לאיש קשר זה"
-                      >
-                         ➕💬
-                      </button>
-                    )}
-                    <button
-                      onClick={() => openReminderModal(contact.id)}
-                      className="p-2 bg-purple-500 text-white rounded-full hover:bg-purple-600 transition-colors duration-200"
-                      title="צור תזכורת"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                    </button>
-                    {/* Placeholder for Office 365 Meeting */}
-                    <button
-                      onClick={() => createOffice365Meeting({ contact: contact.name, date: new Date() })}
-                      className="p-2 bg-indigo-500 text-white rounded-full hover:bg-indigo-600 transition-colors duration-200"
-                      title="צור פגישת 365"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                    </button>
-                  </div>
+                  <div className="font-semibold text-md text-green-300">{contact.name}</div>
+                  <div className="text-xs text-gray-400">{contact.whatsappNumber}</div>
+                  {!chatSummaries.some(chat => chat.contactId === contact.id) && (
+                    <div className="absolute top-1 right-1 bg-yellow-400 text-gray-900 rounded-full p-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                      ➕💬
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -853,7 +839,15 @@ const App = () => {
               key={msg.id}
               className={`flex mb-4 ${msg.sender === myContactName ? 'justify-end' : 'justify-start'}`}
             >
-              <div className={`relative max-w-[80%] px-4 py-2 rounded-lg shadow ${msg.sender === myContactName ? 'bg-green-200 text-right mr-2' : 'bg-white text-left ml-2'}`}>
+              <div
+                className={`relative max-w-[80%] px-4 py-2 rounded-lg shadow ${msg.sender === myContactName ? 'bg-green-200 text-right mr-2' : 'bg-white text-left ml-2'}`}
+                onContextMenu={(e) => { // Right-click for copy (Desktop-only simulation)
+                  e.preventDefault();
+                  // Simulate copying message content to clipboard
+                  document.execCommand('copy'); // Requires user interaction in most browsers
+                  setSystemMessage('הודעה הועתקה ללוח (סימולציה).');
+                }}
+              >
                 <div className="font-bold text-sm mb-1">{msg.sender === myContactName ? 'אתה' : msg.sender}</div>
                 <p className="text-gray-800" dir="rtl">{applyHighlighting(msg.message)}</p>
                 <div className="text-xs text-gray-500 mt-1 text-left">
@@ -905,9 +899,19 @@ const App = () => {
             value={inputMessage}
             onChange={(e) => setInputMessage(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+            onFocus={() => setShowKeyboard(false)} // Hide keyboard if user types in actual input
             disabled={loading || !currentChatId}
             dir="rtl"
           />
+          <button
+            onClick={() => setShowKeyboard(prev => !prev)}
+            className="p-3 bg-gray-500 text-white rounded-full hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-500 transition-colors duration-200"
+            title="הצג/הסתר מקלדת"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+            </svg>
+          </button>
           <button
             onClick={handleSendMessage}
             className="p-3 bg-green-500 text-white rounded-full hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 transition-colors duration-200"
@@ -918,12 +922,41 @@ const App = () => {
             </svg>
           </button>
         </div>
+
+        {/* Virtual Keyboard */}
+        <div className={`transition-all duration-300 ease-in-out transform ${showKeyboard ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0 pointer-events-none'} bg-gray-300 p-4 rounded-b-lg shadow-inner absolute bottom-0 w-full`}>
+          <div className="grid grid-cols-10 gap-1 mb-2">
+            {['😀', '😂', '👍', '❤️', '🙏', '🔥', '🎉', '🤯', '👋', '✅'].map(emoji => (
+              <button key={emoji} onClick={() => handleKeyboardInput(emoji)} className="p-2 bg-white rounded-lg hover:bg-gray-100 text-2xl">
+                {emoji}
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-10 gap-1">
+            {['ק', 'ר', 'א', 'ט', 'ן', 'מ', 'צ', 'ב', 'ה', 'ג',
+              'ש', 'ד', 'ל', 'ך', 'ף', 'ז', 'ס', 'ע', 'י', 'ח',
+              'כ', 'פ', 'ם', 'ו', 'נ', 'ת', 'ץ', '0', '1', '2',
+              '3', '4', '5', '6', '7', '8', '9', ' ', '⬅️', 'שלח'].map(key => (
+              <button
+                key={key}
+                onClick={() => {
+                  if (key === '⬅️') handleKeyboardDelete();
+                  else if (key === 'שלח') handleKeyboardEnter();
+                  else handleKeyboardInput(key);
+                }}
+                className={`p-2 rounded-lg font-semibold text-gray-800 ${key === ' ' ? 'col-span-4 bg-white' : key === '⬅️' ? 'bg-red-300' : key === 'שלח' ? 'bg-green-500 text-white' : 'bg-white hover:bg-gray-100'}`}
+              >
+                {key}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Order Creation Modal */}
       {showOrderModal && (
         <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg p-6 shadow-xl w-full max-w-md" dir="rtl">
+          <div className="bg-white rounded-lg p-6 shadow-xl w-full max-w-md relative" dir="rtl"> {/* Added relative */}
             <h2 className="text-2xl font-bold mb-4 text-gray-800">צור הזמנה חדשה</h2>
             <div className="mb-4">
               <label htmlFor="customerName" className="block text-gray-700 text-sm font-bold mb-2">
@@ -995,7 +1028,7 @@ const App = () => {
       {/* Reminder Creation Modal */}
       {showReminderModal && (
         <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg p-6 shadow-xl w-full max-w-md" dir="rtl">
+          <div className="bg-white rounded-lg p-6 shadow-xl w-full max-w-md relative" dir="rtl"> {/* Added relative */}
             <h2 className="text-2xl font-bold mb-4 text-gray-800">צור תזכורת חדשה</h2>
             <div className="mb-4">
               <label htmlFor="reminderTitle" className="block text-gray-700 text-sm font-bold mb-2">
@@ -1069,7 +1102,7 @@ const App = () => {
       {/* Contact Detail Modal (Internal Page Simulation) */}
       {showContactDetailModal && selectedContact && (
         <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg p-6 shadow-xl w-full max-w-2xl" dir="rtl">
+          <div className="bg-white rounded-lg p-6 shadow-xl w-full max-w-2xl relative" dir="rtl"> {/* Added relative */}
             <div className="flex justify-between items-center mb-4 border-b pb-4">
               <h2 className="text-2xl font-bold text-gray-800">פרטי איש קשר: {selectedContact.name}</h2>
               <button
@@ -1157,7 +1190,7 @@ const App = () => {
       {/* Add New Contact Modal */}
       {showAddContactModal && (
         <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg p-6 shadow-xl w-full max-w-md" dir="rtl">
+          <div className="bg-white rounded-lg p-6 shadow-xl w-full max-w-md relative" dir="rtl"> {/* Added relative */}
             <h2 className="text-2xl font-bold mb-4 text-gray-800">הוסף איש קשר חדש</h2>
             <div className="mb-4">
               <label htmlFor="newContactName" className="block text-gray-700 text-sm font-bold mb-2">
@@ -1254,7 +1287,7 @@ const App = () => {
       {/* Upload Chat for New Contact Modal */}
       {showUploadChatModal && selectedContact && (
         <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg p-6 shadow-xl w-full max-w-md" dir="rtl">
+          <div className="bg-white rounded-lg p-6 shadow-xl w-full max-w-md relative" dir="rtl"> {/* Added relative */}
             <h2 className="text-2xl font-bold mb-4 text-gray-800">העלה צ'אט עבור {selectedContact.name}</h2>
             <p className="mb-4 text-gray-700">
               אנא העלה קובץ גיבוי צ'אט (.txt) כדי לייבא היסטוריית הודעות לאיש קשר זה.
